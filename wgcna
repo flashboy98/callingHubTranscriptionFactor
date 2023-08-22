@@ -1,0 +1,392 @@
+setwd('/data/wujie/rose/WGCNA/all_trait_OB_TM_EL_QG_SMT')
+getwd()
+#install.packages("WGCNA") ##R版本得是3.3.1版，较早期版本才能安装使用
+library(WGCNA)
+## step 1 :导入数据及数据处理
+enableWGCNAThreads(40)
+fpkm = read.table("../trait_OB_TM_EL_QG_SMT/transcript_FPKM50000.scent_2.txt",header=T,row.names = 1,sep="\t")
+WGCNA_matrix = t(fpkm)
+# use WGCNA own function to filter gene samples 
+gsg = goodSamplesGenes(WGCNA_matrix,verbose = 3)
+gsg$allOK
+if(!gsg$allOK){datExpr = WGCNA_matrix[gsg$goodSamples,gsg$goodGenes]}
+
+##已知power就不用step2
+### step2 计算最适软阈值
+#powers = c(c(1:10), seq(from = 12, to=30, by=2))
+#sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5)
+##设置网络构建参数选择范围，计算无尺度分布拓扑矩阵
+#  png("step2-beta-value.trait.png",width = 800,height = 600)
+#  # Plot the results:
+#  sizeGrWindow(9, 5)
+#  par(mfrow = c(1,2));
+#  cex1 = 0.9;
+#  # Scale-free topology fit index as a function of the soft-thresholding power
+#  plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+#       xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+#       main = paste("Scale independence"));
+#  text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+#       labels=powers,cex=cex1,col="red");
+#  # this line corresponds to using an R^2 cut-off of h
+#  abline(h=0.90,col="red")
+#  # Mean connectivity as a function of the soft-thresholding power
+#  plot(sft$fitIndices[,1], sft$fitIndices[,5],
+#       xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+#       main = paste("Mean connectivity"))
+#  text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+#  dev.off()
+
+#
+## step3 构建加权共表达网络（Weight co-expression network)
+## 首先是一步法完成网络构建
+#if(T){
+  net = blockwiseModules(
+    datExpr,
+    power = 18,
+    maxBlockSize = 60000,
+    TOMType = "unsigned", minModuleSize = 100,
+    reassignThreshold = 0, mergeCutHeight = 0.25,
+    numericLabels = TRUE, pamRespectsDendro = FALSE,
+    saveTOMs = TRUE,
+    saveTOMFileBase = "AS-FPKM-TOM",
+    verbose = 3
+  )
+  table(net$colors) 
+## step 4 ：绘制基因聚类和模块颜色组合图
+#if(T){
+  
+  # Convert labels to colors for plotting
+  mergedColors = labels2colors(net$colors)
+  table(mergedColors)
+write.csv(table(mergedColors), "table_netcolors.csv", row.names=FALSE)
+  moduleColors=mergedColors
+  # Plot the dendrogram and the module colors underneath
+  png("step4-genes-modules.tarit.png",width = 800,height = 600)
+  plotDendroAndColors(net$dendrograms[[1]], mergedColors[net$blockGenes[[1]]],
+                      "Module colors",
+                      dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  dev.off()
+  ## assign all of the gene to their corresponding module 
+  ## hclust for the genes.
+#}
+
+## step 5 ：计算模块与性状间的相关性及绘图
+## 这一步主要是针对于连续变量，如果是分类变量，需要转换成连续变量方可使用
+#if(T){
+  nGenes = ncol(datExpr)
+  nSamples = nrow(datExpr)
+  design=read.table("datTrait.all.txt",sep="\t",header = T, row.names=1)
+  #colnames(design)=levels(datTraits$subtype)
+  moduleColors <- labels2colors(net$colors)
+  # Recalculate MEs with color labels
+  MEs0 = moduleEigengenes(datExpr, moduleColors)$eigengenes
+  MEs = orderMEs(MEs0); ##不同颜色的模块的ME值矩 (样本vs模块)
+  moduleTraitCor = cor(MEs, design , use = "p");
+  write.table(moduleTraitCor,file="moduleTraitCor.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+  moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples)
+  write.table(moduleTraitPvalue,file="moduleTraitPvalue.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+  ## Will display correlations and their p-values
+  textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
+                     signif(moduleTraitPvalue, 1), ")", sep = "");
+  dim(textMatrix) = dim(moduleTraitCor)
+  png("step5-Module-trait-relationships.trait.png",width = 1500,height = 1200,res = 120)
+  par(mar = c(6, 8.5, 3, 3));
+  ## Display the correlation values within a heatmap plot
+  labeledHeatmap(Matrix = moduleTraitCor,
+                 xLabels = colnames(design),
+                 yLabels = names(MEs),
+                 ySymbols = names(MEs),
+                 colorLabels = FALSE,
+                 colors = blueWhiteRed(50),
+                 textMatrix = textMatrix,
+                 setStdMargins = FALSE,
+                 cex.text = 0.5,
+                 zlim = c(-1,1),
+                 main = paste("Module-trait relationships"))
+  dev.off()
+#}
+ 
+## step 6：计算MM值和GS值并绘图
+
+#if(T){
+  # names (colors) of the modules
+  modNames = substring(names(MEs), 3)
+  geneModuleMembership = as.data.frame(cor(datExpr, MEs, use = "p"));
+  ## 算出每个模块跟基因的皮尔森相关系数矩
+  ## MEs是每个模块在每个样本里面的
+  ## datExpr是每个基因在每个样本的表达量
+  MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples));
+  names(geneModuleMembership) = paste("MM", modNames, sep="");
+  names(MMPvalue) = paste("p.MM", modNames, sep="");
+  geneTraitSignificance = as.data.frame(cor(datExpr, design, use = "p"));
+  GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples));
+  names(geneTraitSignificance) = paste("GS.", colnames(design), sep="");
+  names(GSPvalue) = paste("p.GS.", colnames(design), sep="");
+  #
+  #
+  module = "blue"
+  column = match(module, modNames);
+  moduleGenes = moduleColors==module;
+  png("step6-Module_membership-gene_significance.blue.png",width = 800,height = 600)
+#  sizeGrWindow(7, 7);
+  par(mfrow = c(1,1));
+  verboseScatterplot(abs(geneModuleMembership[moduleGenes, column]),
+                     abs(geneTraitSignificance[moduleGenes, 1]),
+                     xlab = paste("Module Membership in", module, "module"),
+                     ylab = "Gene significance for Luminal",
+                     main = paste("Module membership vs. gene significance\n"),
+                     cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
+ # module = "lightcyan"
+ # column = match(module, modNames);
+ # moduleGenes = moduleColors==module;
+ # png("step6-Module_membership-gene_significance.lightcyan.png",width = 800,height = 600)
+ # sizeGrWindow(7, 7);
+ # par(mfrow = c(1,1));
+ # verboseScatterplot(abs(geneModuleMembership[moduleGenes, column]),
+ #                    abs(geneTraitSignificance[moduleGenes, 1]),
+ #                    xlab = paste("Module Membership in", module, "module"),
+ #                    ylab = "Gene significance for Luminal",
+#                     main = paste("Module membership vs. gene significance\n"),
+#                     cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
+ 
+# dev.off()
+  
+  #---------------------------------------------------
+  #----------------export MM and p.MM-----------------
+  #---------------------------------------------------
+  
+  MMlist=data.frame(colnames(datExpr),mergedColors)
+  names(MMlist)=c("ID","module")
+  for (module in modNames){
+    oldname=names(MMlist)
+    MMlist=data.frame(MMlist, geneModuleMembership[,paste("MM",module,sep="")],MMPvalue[,paste("p.MM",module,sep="")]);
+    names(MMlist)=c(oldname,paste(paste("MM",module,sep="-")),paste("p.MM",module,sep="-"))}
+  write.table(MMlist,file="MMlist.trait.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+  
+  #---------------------------------------------------
+  #----------------export GS and p.GS-----------------
+  #---------------------------------------------------
+ # 
+  GSlist=data.frame(colnames(datExpr),mergedColors)
+  names(GSlist)=c("ID","module")
+  trait_name = colnames(design)
+  for (trait in trait_name){
+    oldname=names(GSlist)
+    GSlist=data.frame(GSlist, geneTraitSignificance[,paste("GS.",trait,sep="")],GSPvalue[,paste("p.GS.",trait,sep="")]);
+    names(GSlist)=c(oldname,paste(paste("GS",trait,sep="-")),paste("p.GS",trait,sep="-"))}
+  write.table(GSlist,file="GSlist.trait.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+ # 
+#}
+
+## step 7 ：绘制TOM热图+模块性状组合图(结果需要衡量)
+#首先针对所有基因画热图
+if(T){
+  nGenes = ncol(datExpr)
+  nSamples = nrow(datExpr)
+  geneTree = net$dendrograms[[1]];
+  dissTOM = 1-TOMsimilarityFromExpr(datExpr, power = 18);
+  plotTOM = dissTOM^18;
+  diag(plotTOM) = NA;
+  #TOMplot(plotTOM, geneTree, moduleColors, main = "Network heatmap plot, all genes")
+ #然后随机选取部分基因作图
+  nSelect = 400
+  # For reproducibility, we set the random seed
+  set.seed(10);
+  select = sample(nGenes, size = nSelect);
+  selectTOM = dissTOM[select, select];
+  # There’s no simple way of restricting a clustering tree to a subset of genes, so we must re-cluster.
+  selectTree = hclust(as.dist(selectTOM), method = "average")
+  selectColors = moduleColors[select];
+  # Open a graphical window
+  sizeGrWindow(9,9)
+  # Taking the dissimilarity to a power, say 10, makes the plot more informative by effectively changing
+  # the color palette; setting the diagonal to NA also improves the clarity of the plot
+  plotDiss = selectTOM^18;
+  diag(plotDiss) = NA;
+  png("step7-Network-heatmap.png",width = 800,height = 600)
+  TOMplot(plotDiss, selectTree, selectColors, main = "Network heatmap plot, selected genes")
+  dev.off()
+  #最后画模块和性状的关系
+  # Recalculate module eigengenes
+  MEs = moduleEigengenes(datExpr, moduleColors)$eigengenes
+  ## 只有连续型性状才能只有计算
+  #绘制一个性状的图(Geraniol)
+  ## 这里把是否属于 Geraniol 表型这个变量用0,1进行数值化。
+  Line1= as.data.frame(design[,1]);
+  names(Line1) = "Line1"
+  # Add the weight to existing module eigengenes
+  MET = orderMEs(cbind(MEs, Line1))
+  png("step7-Eigengene-dendrogram.Line1.png",width = 800,height = 600)
+  # Plot the relationships among the eigengenes and the trait
+  sizeGrWindow(50,75);
+  par(cex = 0.9)
+  plotEigengeneNetworks(MET, "", marDendro = c(0,4,1,2), marHeatmap = c(3,4,1,2), cex.lab = 0.8, xLabelsAngle
+                      = 90)
+  # Plot the dendrogram
+  sizeGrWindow(60,60);
+  par(cex = 1.0)
+  ## 模块的聚类图
+  plotEigengeneNetworks(MET, "Eigengene dendrogram", marDendro = c(0,4,2,0),
+                      plotHeatmaps = FALSE)
+  # Plot the heatmap matrix (note: this plot will overwrite the dendrogram plot)
+  par(cex = 1.0)
+  ## 性状与模块热图
+  plotEigengeneNetworks(MET, "Eigengene adjacency heatmap", marHeatmap = c(3,4,2,2),
+                      plotDendrograms = FALSE, xLabelsAngle = 90)
+
+  dev.off()
+}
+
+#STEP8:提取指定模块的基因名
+#提取基因信息，进行下游分析包括GO/KEGG等功能数据库的注释
+# Select module
+module = "blue";
+# Select module probes也是提取指定模块的基因名
+probes = colnames(datExpr) ## 我们例子里面的probe就是基因名
+inModule = (moduleColors==module);
+modProbes = probes[inModule];
+#STEP9: 模块的导出
+# Recalculate topological overlap
+TOM = TOMsimilarityFromExpr(datExpr, power = 18); ##需要较长时间
+TOM<-data.frame(TOM)
+write.table(TOM,file="TOM.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+
+# Select the corresponding Topological Overlap
+modTOM = TOM[inModule, inModule];
+dimnames(modTOM) = list(modProbes, modProbes)
+#模块对应的基因关系矩阵
+cyt = exportNetworkToCytoscape(
+  modTOM,
+  edgeFile = paste("CytoscapeInput-edges-", paste(module, collapse="-"), ".txt", sep=""),
+  nodeFile = paste("CytoscapeInput-nodes-", paste(module, collapse="-"), ".txt", sep=""),
+  weighted = TRUE,
+  threshold = 0.02,
+  nodeNames = modProbes,
+  nodeAttr = moduleColors[inModule]
+);
+
+#STEP10: 模块内的分析—— 提取hub genes
+#hub genes指模块中连通性（connectivity）较高的基因，如设定排名
+#前30或前10%）。
+#高连通性的Hub基因通常为调控因子（调控网络中处于偏上游的位
+#置），而低连通性的基因通常为调控网络中偏下游的基因（例如，转运蛋白、催化酶等）。
+#HubGene: |kME| >=阈值（0.8）
+#（1）计算连通性
+### Intramodular connectivity, module membership, and screening for intramodular hub genes
+
+# (1) Intramodular connectivity
+connet=abs(cor(datExpr,use="p"))^18
+Alldegrees1=intramodularConnectivity(connet, moduleColors)
+head(Alldegrees1)
+write.table(Alldegrees1,file="Alldegrees1.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+#（2）模块内的连通性与gene显著性的关系
+# (2) Relationship between gene significance and intramodular connectivity
+Level= as.data.frame(design[,2]); # change specific
+names(Level) = "Level"
+GS1 = as.numeric(cor(Level,datExpr, use="p"))
+GeneSignificance=abs(GS1)
+colorlevels=unique(moduleColors)
+png("step10.2-gene-trait-significance-connectivity.Level.png",width = 3500,height = 1200)
+par(mfrow=c(2,as.integer(0.5+length(colorlevels)/2)))
+par(mar = c(4,5,3,1))
+for (i in c(1:length(colorlevels)))
+{
+  whichmodule=colorlevels[[i]];
+  restrict1 = (moduleColors==whichmodule);
+  verboseScatterplot(Alldegrees1$kWithin[restrict1],
+                     GeneSignificance[restrict1], col=moduleColors[restrict1],
+                     main=whichmodule,
+                     xlab = "Connectivity", ylab = "Gene Significance", abline = TRUE)
+}
+dev.off()
+
+YorN= as.data.frame(design[,2]); # change specific
+names(YorN) = "YorN"
+GS1 = as.numeric(cor(YorN,datExpr, use="p"))
+GeneSignificance=abs(GS1)
+colorlevels=unique(moduleColors)
+png("step10.2-gene-trait-significance-connectivity.YorN.png",width = 3500,height = 1200)
+par(mfrow=c(2,as.integer(0.5+length(colorlevels)/2)))
+par(mar = c(4,5,3,1))
+for (i in c(1:length(colorlevels)))
+{
+  whichmodule=colorlevels[[i]];
+  restrict1 = (moduleColors==whichmodule);
+  verboseScatterplot(Alldegrees1$kWithin[restrict1],
+                     GeneSignificance[restrict1], col=moduleColors[restrict1],
+                     main=whichmodule,
+                     xlab = "Connectivity", ylab = "Gene Significance", abline = TRUE)
+}
+dev.off()
+
+#（3）计算模块内所有基因的连通性, 筛选hub genes
+#abs(GS1)> .9 可以根据实际情况调整参数
+#abs(datKME$MM.black)>.8 至少大于 >0.8
+###(3) Generalizing intramodular connectivity for all genes on the array
+datKME=signedKME(datExpr, MEs, outputColumnName="MM.")
+# Display the first few rows of the data frame
+head(datKME)
+##Finding genes with high gene significance and high intramodular connectivity in
+# interesting modules
+# abs(GS1)> .9 可以根据实际情况调整参数
+# abs(datKME$MM.black)>.8 至少大于 >0.8在黑色模块中
+FilterGenes= abs(GS1)> .9 & abs(datKME$MM.blue)>.8
+table(FilterGenes)
+trait_hubGenes_blue <- colnames(datExpr)[FilterGenes]
+write.table(trait_hubGenes_blue,file="trait_hubGenes_blue.xls",sep="\t",quote=FALSE,row.names=TRUE,col.names=TRUE)
+
+#GO分析在本地做
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+# GO 分析：
+ego <- enrichGO(gene          = trait_hubGenes_blue,
+                # universe      = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+GO_BP <- as.data.frame(ego)
+GO_BP$point_shape<-"0"
+GO_BP$point_size<-"15"
+# write.xlsx(GO_BP,"./results/392_genes_GO_BP.xlsx")
+ggplot(data=GO_BP)+
+  geom_bar(aes(x=reorder(Description,Count),y=Count, fill=-log10(qvalue)), stat='identity') + 
+  coord_flip() +
+  scale_fill_gradient(expression(-log["10"]("q value")),low="red", high = "blue") +
+  xlab("") +
+  ylab("Gene count") +
+  scale_y_continuous(expand=c(0, 0))+
+  theme_bw()+
+  theme(
+    axis.text.x=element_text(color="black",size=rel(1.5)),
+    axis.text.y=element_text(color="black", size=rel(1.6)),
+    axis.title.x = element_text(color="black", size=rel(1.6)),
+    legend.text=element_text(color="black",size=rel(1.0)),
+    legend.title = element_text(color="black",size=rel(1.1))
+    # legend.position=c(0,1),legend.justification=c(-1,0)
+    # legend.position="top",
+  )
+
+# 导出枢纽基因到 Cytoscape 
+FilterGenes= abs(GS1)> .8 & abs(datKME$MM.blue)>.8
+trait_hubGenes_blue <- colnames(datExpr)[FilterGenes]
+hubGene_TOM <- TOM[FilterGenes,FilterGenes]
+dimnames(hubGene_TOM) = list(colnames(datExpr)[FilterGenes], colnames(datExpr)[FilterGenes]) 
+cyt = exportNetworkToCytoscape(hubGene_TOM, 
+                                 edgeFile = paste("CytoscapeInput-edges-trait_hubGenes_blue-", ".txt", sep=""), 
+                                 nodeFile = paste("CytoscapeInput-nodes-trait_hubGenes_blue-", ".txt", sep=""), 
+                                 weighted = TRUE, 
+                                 threshold = 0.02, 
+                                 nodeNames = trait_hubGenes_blue, 
+                                 altNodeNames = trait_hubGenes_blue, 
+                                 nodeAttr = mergedColors[FilterGenes]
+                                 )
+
+
+
+save.image("power18_all_trait.RData")
