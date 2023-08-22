@@ -1,0 +1,124 @@
+setwd("F:/others/yafeiZhao/20230605/cluster5")
+sink(file = "EnrichmentLog.txt",split = TRUE)
+getwd()
+library(clusterProfiler)
+library(topGO)
+library(ggnewscale)
+library(grDevices)
+
+#导入经过解析的eggNOG注释结果
+KOannotation <- read.delim("KOannotation.tsv", stringsAsFactors=FALSE)
+GOannotation <- read.delim("GOannotation.tsv", stringsAsFactors=FALSE)
+
+#导入经过解析的GO数据库基本信息
+GOinfo <- read.delim("go.tb",stringsAsFactors = FALSE)
+
+#导入gene_list也就是前景基因
+gene_list<- read.table("forward_geneList.txt",header=FALSE)
+
+# GO富集
+# 拆分成BP，MF，CC三个数据框
+GOannotationSplit = split(GOannotation, with(GOannotation, level))
+
+# GO的biological_process方面
+GObp <- enricher(
+                 gene = gene_list$V1,
+                 pvalueCutoff = 0.5,
+                 qvalueCutoff = 0.5,
+                 TERM2GENE = GOannotationSplit[['biological_process']][c(2,1)],
+                 TERM2NAME = GOinfo[1:2]
+                 )
+
+# GO的cellular_component方面
+GOcc <- enricher(
+                 gene = gene_list$V1,
+                 pvalueCutoff = 0.5,
+                 qvalueCutoff = 0.5,
+                 TERM2GENE = GOannotationSplit[['cellular_component']][c(2,1)],
+                 TERM2NAME = GOinfo[1:2]
+                 )
+
+# GO的molecular_function方面
+GOmf <- enricher(
+                 gene = gene_list$V1,
+                 pvalueCutoff = 0.5,
+                 qvalueCutoff = 0.5,
+                 TERM2GENE = GOannotationSplit[['molecular_function']][c(2,1)],
+                 TERM2NAME = GOinfo[1:2]
+                 )
+
+# KEGG_KO富集
+KEGGko <- enricher(
+                   gene_list$V1,
+                   pvalueCutoff = 0.5,
+                   qvalueCutoff = 0.5,
+                   TERM2GENE=KOannotation[c(3,1)],
+                   TERM2NAME=KOannotation[c(3,4)]
+                   )
+#将富集分析结果写入csv文件
+write.csv(GObp@result,file = "GObp_enrichment.csv")
+write.csv(GOcc@result,file = "GOcc_enrichment.csv")
+write.csv(GOmf@result,file = "GOmf_enrichment.csv")
+write.csv(KEGGko@result,file = "KEGGko_enrichment.csv")
+
+# 不同的可视化策略
+# dotplot画bubble diagram
+# 储存为eps格式
+#cairo_ps("GObpBubble.eps")
+#dotplot(GObp,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("GOccBubble.eps")
+#dotplot(GOcc,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("GOmfBubble.eps")
+#dotplot(GOmf,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("KEGGkoBubble.eps")
+#dotplot(KEGGko,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+
+# 储存为pdf格式
+pdf("GObpBubble.pdf")
+dotplot(GObp,color = "pvalue",showCategory = 20,font.size = 8,orderBy = "x")
+dev.off()
+pdf("GOccBubble.pdf")
+dotplot(GOcc,color = "pvalue",showCategory = 20,font.size = 8,orderBy = "x")
+dev.off()
+pdf("GOmfBubble.pdf")
+dotplot(GOmf,color = "pvalue",showCategory = 20,font.size = 8,orderBy = "x")
+dev.off()
+pdf("KEGGkoBubble.pdf")
+dotplot(KEGGko,color = "pvalue",showCategory = 20,font.size = 8,orderBy = "x")
+dev.off()
+
+# barplot画条形图
+# 储存为eps格式
+#cairo_ps("GObpBar.eps")
+#barplot(GObp,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("GOccBar.eps")
+#barplot(GOcc,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("GOmfBar.eps")
+#barplot(GOmf,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#cairo_ps("KEGGkoBar.eps")
+#barplot(KEGGko,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+
+# 储存为pdf格式
+#pdf("GObpBar.pdf")
+#barplot(GObp,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#pdf("GOccBar.pdf")
+#barplot(GOcc,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#pdf("GOmfBar.pdf")
+#barplot(GOmf,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+#pdf("KEGGkoBar.pdf")
+#barplot(KEGGko,showCategory = 20,font.size = 8,orderBy = "x")
+#dev.off()
+
+# 保存工作空间
+save.image("Enrichment.RData")
