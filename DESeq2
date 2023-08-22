@@ -1,0 +1,208 @@
+setwd("E:/DESeq2_DEG")
+sink(file = "old18hDESeq2.txt",split = TRUE)
+getwd()
+
+# step 1 环境配置
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+# install.packages("BiocManager")
+#BiocManager::install("DESeq2")
+library("DESeq2")
+library("tidyverse")
+library("dplyr")
+library("pheatmap")
+library("apeglm")
+library("ggplot2")
+library("ggpubr")
+library("ggthemes")
+
+# step 2 导入数据
+#import countData
+counts <- read_csv("old18h_transcript_count_matrix.csv")
+counts
+class(counts)
+#convert back to regular data frames
+counts <- as.data.frame(counts)
+class(counts)
+#counts 矩阵第一列transcript_id需要去除，当作行名处理
+rownames(counts) <- counts[,1]
+counts <- counts[,-1]
+head(counts)
+
+#import colData
+treatments <- factor(c(rep("control",3),rep("botrytis",3)),levels = c("control","botrytis"))
+treatments
+metadata <- data.frame(row.names = (colnames(counts)),treatments)
+metadata
+
+#check if rownames(metadata) equals to colnames(counts)
+names(counts)
+rownames(metadata)
+names(counts) == rownames(metadata)
+all(names(counts) == rownames(metadata))
+
+# step 3   构建dds（=DESeqDataSet_Object）对象
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = metadata,
+                              design = ~treatments)
+
+# step 4 run DESeq pipeline
+dds2 <- DESeq(dds)
+dds2
+sizeFactors(dds2)
+dispersions(dds2)
+#contrast用于指定比较的两组信息
+contrastNow <- c("treatments","botrytis","control")
+results(dds2,contrast = contrastNow)                              
+res <- results(dds2,contrast = contrastNow)
+res
+head(res)
+summary(res)
+
+# step5 获取结果数据
+#获取标准化后的数据
+normalized_counts <- counts(dds2, normalized=TRUE)
+head(normalized_counts)
+normalized_counts_mad <- apply(normalized_counts, 1, mad)
+normalized_counts <- normalized_counts[order(normalized_counts_mad, decreasing=T), ]
+write.csv(normalized_counts, file="old18hNormalized_counts.csv")
+
+#给输出结果增加样本平均表达信息
+#获取第一组数据平均值
+baseControl <- counts(dds2, normalized=TRUE)[, colData(dds2)$treatments == "control"]
+if (is.vector(baseControl)){
+  baseMeanControl <- as.data.frame(baseControl)
+} else {
+  baseMeanControl <- as.data.frame(rowMeans(baseControl))
+}
+colnames(baseMeanControl) <- c("controlMean")
+head(baseMeanControl)
+#获取第二组数据平均值
+baseBotrytis <- counts(dds2, normalized=TRUE)[, colData(dds2)$treatments == "botrytis"]
+if (is.vector(baseBotrytis)){
+  baseMeanBotrytis <- as.data.frame(baseBotrytis)
+} else {
+  baseMeanBotrytis <- as.data.frame(rowMeans(baseBotrytis))
+}
+colnames(baseMeanBotrytis) <- c("botrytisMean")
+head(baseMeanBotrytis)
+#结果组合
+res <- cbind(baseMeanControl, baseMeanBotrytis, as.data.frame(res))
+res <- res[order(res$pvalue),]
+
+#将原始结果进行输出
+write.csv(res,file = "old18hAll_results.csv")
+
+#筛选差异表达基因
+diff_gene_deseq2 <- subset(res,pvalue <= 0.05 & abs(log2FoldChange)>=1)
+dim(diff_gene_deseq2)
+head(diff_gene_deseq2)
+write.csv(diff_gene_deseq2,file = "old18hDEG_botrytis_vs_control.csv")
+
+# step6 画图
+# 直观体现表达情况的箱型图和直方图
+rld <- rlog(dds)
+counts_new <- assay(rld)
+#下一步将counts数据框变成矩阵，但是gene names stuck in the row.names
+#所以这个矩阵并不能看到行名
+counts <- as.matrix(counts)
+counts <- apply(counts,2,as.numeric)
+png("old18h_exprMatrixHistogram.png")
+par(cex = 0.7)
+n.sample = ncol(counts)
+if(n.sample > 40)
+  par(cex = 0.5)
+cols <- rainbow(n.sample*1.2)
+par(mfrow = c(2,2))
+boxplot(counts,col = cols,main = "counts_expression value",las = 2)
+boxplot(counts_new,col = cols, main = "counts_new_expression value",las = 2)
+hist(counts)
+hist(counts_new)
+dev.off()
+
+# MA图
+png("old18hplotMA.png")
+res <- results(dds2,contrast = contrastNow)
+plotMA(res)
+dev.off()
+
+# PCA图
+png("old18hplotPCA.png")
+plotPCA(rld,intgroup = "treatments")
+dev.off()
+
+# pheatmap图
+#看一下q值小于0.1的有多少
+table(res$padj<0.1)
+heatmap_DEG <- res[order(res$padj),]
+heatmap_DEG = as.data.frame(heatmap_DEG)
+heatmap_DEG = na.omit(heatmap_DEG)
+#画top25的gene
+choose_gene=head(row.names(heatmap_DEG),25)  
+#在画箱型图和直方图时，counts对象已经被转变为数据类型：数值型
+#数据结构：matrix ； 此时矩阵时没有gene id作为行名或矩阵的第一列，所以重新导入数据
+counts <- read_csv("old18h_transcript_count_matrix.csv")
+counts <- as.data.frame(counts)
+rownames(counts) <- counts[,1]
+counts <- counts[,-1]
+choose_matrix=counts[choose_gene,]
+choose_matrix=t(scale(t(choose_matrix)))
+png("old18hHeatmap.png")
+pheatmap(choose_matrix,cluster_row = T)
+dev.off()
+
+# volcano-ggplot
+#差异基因筛选用pvalue小于0.05和log2FC相比于1
+volcanoData <- read.csv("old18hAll_results.csv")
+volcanoData <- na.omit(volcanoData)
+volcanoData <- volcanoData[,c(1,5,8,9)]
+volcanoData$logp <- -log10(volcanoData$pvalue)
+colnames(volcanoData) <- c("Gene","log2FC","pvalue","padj","logp")
+ggscatter(volcanoData,x = "log2FC",y = "logp")+theme_base()
+#这样太丑了，现在要把高低表达不同和差异显著与否的凸显出来
+volcanoData$Group <- "not_significant"
+sigDownGene <- volcanoData$Gene[(volcanoData$log2FC <= -1 & volcanoData$pvalue<= 0.05)]
+sigUpGene <- volcanoData$Gene[(volcanoData$log2FC >= 1 & volcanoData$pvalue <= 0.05)]
+#用Group列划分up,down和no_sig
+volcanoData$Group[match(sigDownGene,volcanoData$Gene)] <- "down_regulated"
+volcanoData$Group[match(sigUpGene,volcanoData$Gene)] <- "up_regulated"
+#用GeneLab列记录DEG的gene_id
+#GeneLab太多了，所以各选取padj最小的十个
+volcanoData <- volcanoData[order(volcanoData$padj),]
+sigDownGeneLab <- head(volcanoData$Gene[(volcanoData$log2FC <= -1 & volcanoData$padj<= 0.1)],5)
+sigUpGeneLab <- head(volcanoData$Gene[(volcanoData$log2FC >= 1 & volcanoData$padj <= 0.1)],5)
+volcanoData$GeneLab <- ""
+sigGeneLab <- c(sigDownGeneLab,sigUpGeneLab)
+sigGeneLababbr <- substring(sigGeneLab,17)
+volcanoData$GeneLab[match(sigGeneLab,volcanoData$Gene)] <- sigGeneLababbr
+#volcanoData$GeneLab <- substring(volcanoData$GeneLab,17)
+#再次用ggscatter作图
+ggscatter(volcanoData,x = "log2FC",y = "logp", color = "Group",
+          shape = 16,
+          label = volcanoData$GeneLab,
+          front.label = 7,
+          xlab = "log2(Fold Change)",
+          ylab = "-log(Pvalue)",
+          repel = T,
+          size = 1)+theme_base()
+#如果还是觉得丑，可以通过theme设置主题
+png("old18hVolcanoPlot.png")
+ggscatter(volcanoData,x = "log2FC",y = "logp", color = "Group",
+          shape = 16,
+          palette = c("#7B68EE", "#E0E0E0", "#FF4500"),
+          label = volcanoData$GeneLab,
+          font.label = 7,
+          xlab = "log2(Fold Change)",
+          ylab = "-log(Pvalue)",
+          repel = TRUE,
+          size = 1)+
+  theme(legend.title = element_blank(),
+        legend.text = element_text(size = 8,face = "bold"),
+        legend.margin = margin(t = 0,r = 0,b = 0, l = 0, unit = "pt"),
+        legend.direction = "horizontal",
+        legend.position = c(0.5,0.93),
+        panel.background = element_rect(fill = "transparent",color = "black"),
+        plot.background = element_rect(fill = "transparent",color = "black"))+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", size = 0.05, color = "grey")+
+  geom_vline(xintercept = c(-1,1), linetype = "dashed", size = 0.05, color = "grey")
+dev.off()
+save.image("old18hDESeq2.R")
