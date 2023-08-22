@@ -1,0 +1,13 @@
+#建立索引
+hisat2-build -p 10 genome.fa genome
+#用hisat2将reads比对到基因组
+for i in `seq 1 3`;do hisat2 --threads 40 -x RhySMT.genome -1 el_so${i}_1.fq -2 el_so${i}_2.fq -S el_so${i}.sam ;done
+#转换格式
+samtools sort -@ 28 -o S${i}.sort.bam S${i}.sam
+#stringtie对做注释和表达量统计
+stringtie -p 28 -G .genome.gff3 -o ${i}.gtf -l ${i} ${i}.sort.bam
+find ~./align -name '*.gtf' > ./align/merglist.txt
+stringtie --merge -l sample -p 28 -G genome.gff3 -o stringtie_merged.gtf ./align/merglist.txt
+stringtie -e -B -p 28 -G stringtie_merged2.gtf -o ballgown/${i}/${i}.gtf ${i}.sort.bam
+#整合数据
+Ballgown
