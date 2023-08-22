@@ -1,0 +1,145 @@
+# wangzc 
+# version 2022/04
+# 分析没有repeats的RNA_seq数据，单因素实验设计
+# 也要计算有repeats的月季RNA_seq数据，看一下dispersion分布
+
+# edgeR设计用于实际读取计数。不建议将预测的转录本丰度输入到edgeR
+
+setwd("E:/META_analysis/edgeR_DEG/bc48hpi_try")
+sink(file = "repeatsEdgeR.txt",split = TRUE)
+getwd()
+
+# step 1 环境配置
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#install.packages("BiocManager")
+#BiocManager::install("edgeR")
+# 用于估计离散系数
+#if (!requireNamespace("statmod", quietly = TRUE))
+#install.packages("statmod")
+library("statmod")
+library("edgeR")
+library("ggplot2")
+#library("ColorBrewer")
+
+# step 2 构建储存数据的DGEList对象
+
+# 创建的list结构简单，包括counts,samples[至少需要的两个元素]和genes（可能有多种命名法命名）三个表格
+counts <- read.csv("old48h_transcript_count_matrix.csv")
+rownames(counts) <- counts[,1]
+counts <- counts[,-1]
+object_DGEList <- DGEList(counts = counts,genes = rownames(counts))
+# 指定实验设计方案矩阵
+#treatments1 <- c("mock","bc")
+# 广义线性模型
+treatments <- c("PDB","PDB","PDB","BC","BC","BC")
+design <- model.matrix(~rev(treatments))
+rownames(design) <- colnames(object_DGEList)
+colnames(design) <- c("intercept","trt")
+design
+
+# step 3 数据过滤
+
+# 去除低表达量的基因
+
+# step 3.1 手动过滤
+# CPM标度转换
+cpm<- edgeR::cpm(object_DGEList)
+lcpm <- edgeR::cpm(object_DGEList, log=TRUE)
+# 经验设置为cpm=1位为cutoff点，但是这并不很精准
+# 因为随着测序深度增加，例如20million（2 千万），cpm=1 意味着 counts=20，阈值可能会有点高
+# 测序深度低的话，例如2million（2百万），cpm=1 意味着counts=1，阈值可能会太低
+# 去除低表达量的基因，最后面的1是设置的最小组内样本数
+#keep <- rowSums(cpm(object_DGEList)>1) >= 1
+#object_DGEList <- y[keep, , keep.lib.sizes=FALSE]
+
+# step 3.2 自动过滤
+# cpm(object_DGEList)>1是一种相对严格的标准
+# 满足要求的基因数量少时，可以使用
+keep <- edgeR::filterByExpr(object_DGEList)
+object_DGEList <- object_DGEList[keep, ,keep.lib.sizes = FALSE]
+
+# step 4 标准化
+
+# 对数据进行TMM(trimmed mean of M-values) normalization，计算标准化因子
+object_DGEList <- calcNormFactors(object_DGEList)
+object_DGEList$samples
+
+# step 5 数据探索，样本无监督聚类
+
+# 检查样本中的异常值
+# Multidimensional scaling plot中
+# 样本之间的距离对应于这些样品之间主要生物变异系数（BCV）
+pdf("plotMDS.pdf")
+plotMDS(object_DGEList)
+dev.off()
+
+# step 6 估计离散系数(dispersion)
+
+# 估计离散系数
+object_DGEList <- estimateDisp(object_DGEList,design,robust = TRUE)
+object_DGEList$common.dispersion
+
+# 用BCV plot查看离散系数
+pdf("plotBCV.pdf")
+plotBCV(object_DGEList)
+dev.off()
+
+# step 7 差异分析
+
+# 存在生物学重复的正常样本
+
+# step 7_1这里的exactTest函数还是基于qCML并且只针对单因素实验设计
+#et <- exactTest(exprSet)
+#tTag <- topTags(et, n=nrow(exprSet))
+#tTag <- as.data.frame(tTag)
+#write.csv(tTag,file = "LC_1_vs_LC_2_edgeR.csv")
+
+# step 7_2 加性模型适用于配对试验设计或具有批次效应的试验
+# 在进行negative binomial GLMs拟合之前，需要先指定实验设计方案design
+# 先进行glm拟合,然后执行likelihood ratio test
+fit <- glmFit(object_DGEList, design)
+colnames(fit)
+lrt <- glmLRT(fit)
+
+# step 8 查看结果
+
+# 展示top10显著表达的差异基因（较小的p值，较大的logFC）
+topTags(lrt)
+
+# 根据p值对分析结果升序排列
+orderP <- order(lrt$table$PValue)
+# 查看TOP10基因的CPM（counts-per-million）值
+top10CPM <- as.data.frame(cpm(object_DGEList)[orderP[1:10],])
+top10CPM
+
+# 用decideTestsDGE看下有多少基因上调, 多少基因下调
+DEGresults <- decideTestsDGE(lrt, p.value = 0.05, lfc = 0)
+# 以FDR=0.05为阈值呢
+summary(DEGresults)
+
+# 将结果整理成excel表
+# 改一下DEGresults的名称
+colnames(DEGresults) <- "Signifi"
+# 组合将所需要的数据组成一个新的data.frame
+results <- cbind(object_DGEList$genes,object_DGEList$counts,lrt$table,DEGresults)
+head(results)
+# 将新生成的results数据框写成一个excel数据表
+write.csv(x = results,file = "edgeRresult.csv",row.names = F)
+# step 9 结果可视化
+
+# 绘制火山图
+pdf("plotVolcano.pdf")
+df <- lrt$table
+ggplot(df, aes(x=logFC, y=-log10(df$PValue)) ) +
+  geom_point() +
+  ylab("-log10(p value)") +
+  theme_bw()
+dev.off()
+# 绘制差异基因散点图（类似火山图）
+pdf("plotMD.pdf")
+plotMD(lrt)
+abline(h=c(-1, 1), col="blue")
+dev.off()
+
+save.image("edgeRrepeats.RData")
